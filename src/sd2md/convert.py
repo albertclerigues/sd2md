@@ -53,7 +53,14 @@ def _convert_node(node: dict, heading_depth: int, floats: dict) -> str:
         return _convert_section(node, heading_depth, floats)
 
     if name in ("para", "simple-para", "note-para"):
-        return _convert_inline(node) + "\n\n"
+        text = _convert_inline(node) + "\n\n"
+        # Expand any float-anchors embedded in the paragraph
+        for child in children:
+            if child.get("#name") == "float-anchor":
+                refid = child.get("$", {}).get("refid", "")
+                if refid in floats:
+                    text += _convert_float(floats[refid])
+        return text
 
     if name == "acknowledgment":
         heading = "#" * heading_depth + " Acknowledgments\n\n"
@@ -155,6 +162,9 @@ def _convert_inline(node: dict) -> str:
     if name == "label":
         return text
 
+    if name == "br":
+        return " "
+
     if name == "display":
         return _convert_display(node, {})
 
@@ -207,6 +217,95 @@ def _convert_display(node: dict, floats: dict) -> str:
     return ""
 
 
+def _convert_table(node: dict) -> str:
+    """Convert a table float to a GFM Markdown table."""
+    children = node.get("$$", [])
+    label = ""
+    caption = ""
+    tgroup = None
+
+    for child in children:
+        cname = child.get("#name", "")
+        if cname == "label":
+            label = child.get("_", "")
+        elif cname == "caption":
+            caption = _inline_children(child)
+        elif cname == "tgroup":
+            tgroup = child
+
+    # Caption line
+    desc = f"{label}: {caption}" if label and caption else caption or label
+    caption_line = f"**{desc}**" if desc else ""
+
+    if tgroup is None:
+        # Fallback to caption-only
+        return f"\n\n*{desc}*\n\n" if desc else ""
+
+    num_cols = int(tgroup.get("$", {}).get("cols", 0))
+    thead = None
+    tbody = None
+    for child in tgroup.get("$$", []):
+        cname = child.get("#name", "")
+        if cname == "thead":
+            thead = child
+        elif cname == "tbody":
+            tbody = child
+
+    def _extract_rows(section):
+        rows = []
+        if section is None:
+            return rows
+        for child in section.get("$$", []):
+            if child.get("#name") == "row":
+                cells = []
+                for entry in child.get("$$", []):
+                    if entry.get("#name") == "entry":
+                        cell_text = entry.get("_", "")
+                        if entry.get("$$"):
+                            cell_text = _inline_children(entry)
+                        # Replace any newlines/pipes that would break GFM
+                        cell_text = cell_text.replace("\n", " ").strip()
+                        cells.append(cell_text)
+                rows.append(cells)
+        return rows
+
+    header_rows = _extract_rows(thead)
+    body_rows = _extract_rows(tbody)
+
+    # Determine header
+    if header_rows:
+        header = header_rows[0]
+    elif body_rows:
+        header = body_rows.pop(0)
+    else:
+        header = [""] * num_cols
+
+    # Ensure consistent column count
+    if num_cols == 0:
+        num_cols = max(
+            len(header),
+            max((len(r) for r in body_rows), default=0),
+        )
+
+    # Pad rows to num_cols
+    def _pad(row):
+        return row + [""] * (num_cols - len(row)) if len(row) < num_cols else row
+
+    header = _pad(header)
+    body_rows = [_pad(r) for r in body_rows]
+
+    # Build GFM table
+    lines = []
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("| " + " | ".join("---" for _ in range(num_cols)) + " |")
+    for row in body_rows:
+        lines.append("| " + " | ".join(row) + " |")
+
+    table_md = "\n".join(lines)
+    parts = [p for p in [caption_line, table_md] if p]
+    return "\n\n" + "\n\n".join(parts) + "\n\n"
+
+
 def _convert_float(node: dict) -> str:
     """Convert a float (figure/table) to Markdown."""
     name = node.get("#name", "")
@@ -228,15 +327,6 @@ def _convert_float(node: dict) -> str:
         return f"\n\n*{desc}*\n\n"
 
     if name == "table":
-        label = ""
-        caption = ""
-        for child in children:
-            cname = child.get("#name", "")
-            if cname == "label":
-                label = child.get("_", "")
-            elif cname == "caption":
-                caption = _inline_children(child)
-        desc = f"{label}: {caption}" if label and caption else caption or label
-        return f"\n\n*{desc}*\n\n"
+        return _convert_table(node)
 
     return ""
