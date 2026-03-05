@@ -74,7 +74,16 @@ def _convert_node(
         return _convert_section(node, heading_depth, floats, footnotes)
 
     if name in ("para", "simple-para", "note-para"):
-        text = _convert_inline(node, footnotes) + "\n\n"
+        text = _convert_inline(node, footnotes)
+        if "•" in text:
+            parts_list = text.split("•")
+            preamble = parts_list[0].strip()
+            items = [p.strip() for p in parts_list[1:] if p.strip()]
+            text = ""
+            if preamble:
+                text = preamble + "\n\n"
+            text += "\n".join(f"- {item}" for item in items)
+        text += "\n\n"
         # Expand any float-anchors embedded in the paragraph
         for child in children:
             if child.get("#name") == "float-anchor":
@@ -176,7 +185,7 @@ def _convert_inline(node: dict, footnotes: dict | None = None) -> str:
 
     if name == "sup":
         inner = _inline_children(node, footnotes) if children else text
-        return f"^{inner}^"
+        return f"<sup>{inner}</sup>"
 
     if name == "cross-ref":
         refid = attrs.get("refid", "")
