@@ -30,30 +30,51 @@ def convert_body(body_json: dict) -> str:
         if f.get("$", {}).get("id")
     }
 
+    footnotes = {}  # id -> (label, content)
+
     parts = []
     for node in content:
-        parts.append(_convert_node(node, heading_depth=2, floats=floats))
+        parts.append(
+            _convert_node(node, heading_depth=2, floats=floats, footnotes=footnotes)
+        )
 
     md = "\n".join(parts)
+
+    # Append footnote definitions
+    if footnotes:
+        fn_lines = []
+        for fn_id in sorted(
+            footnotes,
+            key=lambda k: int(footnotes[k][0]) if footnotes[k][0].isdigit() else 0,
+        ):
+            label, fn_content = footnotes[fn_id]
+            fn_lines.append(f"[^{label}]: {fn_content}")
+        md += "\n\n" + "\n".join(fn_lines)
+
     # Clean up excessive blank lines
     md = re.sub(r"\n{3,}", "\n\n", md)
     return md.strip()
 
 
-def _convert_node(node: dict, heading_depth: int, floats: dict) -> str:
+def _convert_node(
+    node: dict, heading_depth: int, floats: dict, footnotes: dict | None = None
+) -> str:
     """Recursively convert a JSON node to Markdown."""
     name = node.get("#name", "")
     children = node.get("$$", [])
     attrs = node.get("$", {})
 
+    if footnotes is None:
+        footnotes = {}
+
     if name in ("body", "sections", "appendices"):
-        return _convert_children(children, heading_depth, floats)
+        return _convert_children(children, heading_depth, floats, footnotes)
 
     if name == "section":
-        return _convert_section(node, heading_depth, floats)
+        return _convert_section(node, heading_depth, floats, footnotes)
 
     if name in ("para", "simple-para", "note-para"):
-        text = _convert_inline(node) + "\n\n"
+        text = _convert_inline(node, footnotes) + "\n\n"
         # Expand any float-anchors embedded in the paragraph
         for child in children:
             if child.get("#name") == "float-anchor":
@@ -64,14 +85,18 @@ def _convert_node(node: dict, heading_depth: int, floats: dict) -> str:
 
     if name == "acknowledgment":
         heading = "#" * heading_depth + " Acknowledgments\n\n"
-        return heading + _convert_children(children, heading_depth + 1, floats)
+        return heading + _convert_children(
+            children, heading_depth + 1, floats, footnotes
+        )
 
     if name == "conflict-of-interest":
         heading = "#" * heading_depth + " Conflict of Interest\n\n"
-        return heading + _convert_children(children, heading_depth + 1, floats)
+        return heading + _convert_children(
+            children, heading_depth + 1, floats, footnotes
+        )
 
     if name == "list":
-        return _convert_list(node, floats) + "\n"
+        return _convert_list(node, floats, footnotes) + "\n"
 
     if name == "display":
         return _convert_display(node, floats)
@@ -83,23 +108,38 @@ def _convert_node(node: dict, heading_depth: int, floats: dict) -> str:
         return ""
 
     if name == "footnote":
-        return _convert_children(children, heading_depth, floats)
+        # Collect footnote definition; don't render inline
+        fn_id = attrs.get("id", "")
+        label = ""
+        content_parts = []
+        for child in children:
+            if child.get("#name") == "label":
+                label = child.get("_", "")
+            else:
+                content_parts.append(_convert_inline(child, footnotes).strip())
+        if fn_id and label:
+            footnotes[fn_id] = (label, " ".join(content_parts))
+        return ""
 
     # Fallback: convert children
     if children:
-        return _convert_children(children, heading_depth, floats)
+        return _convert_children(children, heading_depth, floats, footnotes)
 
     return ""
 
 
-def _convert_children(children: list, heading_depth: int, floats: dict) -> str:
+def _convert_children(
+    children: list, heading_depth: int, floats: dict, footnotes: dict | None = None
+) -> str:
     parts = []
     for child in children:
-        parts.append(_convert_node(child, heading_depth, floats))
+        parts.append(_convert_node(child, heading_depth, floats, footnotes))
     return "".join(parts)
 
 
-def _convert_section(node: dict, heading_depth: int, floats: dict) -> str:
+def _convert_section(
+    node: dict, heading_depth: int, floats: dict, footnotes: dict | None = None
+) -> str:
     children = node.get("$$", [])
     title = ""
     body_parts = []
@@ -108,13 +148,15 @@ def _convert_section(node: dict, heading_depth: int, floats: dict) -> str:
         if child.get("#name") == "section-title":
             title = _convert_inline(child)
         else:
-            body_parts.append(_convert_node(child, heading_depth + 1, floats))
+            body_parts.append(
+                _convert_node(child, heading_depth + 1, floats, footnotes)
+            )
 
     heading = "#" * heading_depth + " " + title + "\n\n" if title else ""
     return heading + "".join(body_parts)
 
 
-def _convert_inline(node: dict) -> str:
+def _convert_inline(node: dict, footnotes: dict | None = None) -> str:
     """Convert a node and its children to inline Markdown text."""
     name = node.get("#name", "")
     text = node.get("_", "")
@@ -125,26 +167,48 @@ def _convert_inline(node: dict) -> str:
         return text
 
     if name == "bold":
-        inner = _inline_children(node) if children else text
+        inner = _inline_children(node, footnotes) if children else text
         return f"**{inner}**"
 
     if name == "italic":
-        inner = _inline_children(node) if children else text
+        inner = _inline_children(node, footnotes) if children else text
         return f"*{inner}*"
 
     if name == "sup":
-        inner = _inline_children(node) if children else text
+        inner = _inline_children(node, footnotes) if children else text
         return f"^{inner}^"
 
     if name == "cross-ref":
-        return _inline_children(node) if children else text
+        refid = attrs.get("refid", "")
+        if refid.startswith("fn"):
+            # Footnote reference - extract label from sup child
+            label = ""
+            for child in children:
+                if child.get("#name") == "sup":
+                    label = child.get("_", "") or _inline_children(child, footnotes)
+            return f"[^{label}]" if label else _inline_children(node, footnotes)
+        return _inline_children(node, footnotes) if children else text
 
     if name == "inter-ref":
         href = attrs.get("href", "")
-        inner = _inline_children(node) if children else text
+        inner = _inline_children(node, footnotes) if children else text
         return f"[{inner}]({href})" if href else inner
 
     if name == "float-anchor":
+        return ""
+
+    if name == "footnote":
+        # Collect footnote and return empty string
+        fn_id = attrs.get("id", "")
+        label = ""
+        content_parts = []
+        for child in children:
+            if child.get("#name") == "label":
+                label = child.get("_", "")
+            else:
+                content_parts.append(_convert_inline(child, footnotes).strip())
+        if footnotes is not None and fn_id and label:
+            footnotes[fn_id] = (label, " ".join(content_parts))
         return ""
 
     if name in ("math", "formula"):
@@ -157,7 +221,7 @@ def _convert_inline(node: dict) -> str:
         latex = math_node_to_latex(math_node)
         if latex:
             return f"${latex}$"
-        return _inline_children(node) if children else text
+        return _inline_children(node, footnotes) if children else text
 
     if name == "label":
         return text
@@ -170,19 +234,19 @@ def _convert_inline(node: dict) -> str:
 
     # For para/simple-para/section-title and other containers, join children
     if children:
-        return _inline_children(node)
+        return _inline_children(node, footnotes)
 
     return text
 
 
-def _inline_children(node: dict) -> str:
+def _inline_children(node: dict, footnotes: dict | None = None) -> str:
     parts = []
     for child in node.get("$$", []):
-        parts.append(_convert_inline(child))
+        parts.append(_convert_inline(child, footnotes))
     return "".join(parts)
 
 
-def _convert_list(node: dict, floats: dict) -> str:
+def _convert_list(node: dict, floats: dict, footnotes: dict | None = None) -> str:
     items = []
     for child in node.get("$$", []):
         if child.get("#name") == "list-item":
@@ -190,7 +254,7 @@ def _convert_list(node: dict, floats: dict) -> str:
             for sub in child.get("$$", []):
                 if sub.get("#name") == "label":
                     continue  # skip bullet labels
-                item_parts.append(_convert_inline(sub).strip())
+                item_parts.append(_convert_inline(sub, footnotes).strip())
             items.append("- " + " ".join(item_parts))
     return "\n".join(items) + "\n"
 
