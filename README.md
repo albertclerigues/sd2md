@@ -6,7 +6,7 @@ Convert ScienceDirect articles to clean Markdown files with YAML frontmatter —
 
 - Fetches article HTML and structured JSON directly from a ScienceDirect URL — no manual browser DevTools steps
 - Extracts full metadata (title, authors, DOI, journal, year, volume, issue, pages, keywords)
-- Converts article body (sections, equations, figures, tables, lists) to Markdown
+- Converts article body (sections, equations, figures, tables, lists) to Markdown with MathML-to-LaTeX equation conversion
 - Generates YAML frontmatter for easy integration with Obsidian, Zettlr, Pandoc, etc.
 - Auto-generates filenames: `YYYY-author-title-in-kebab-case.md`
 - Detects paywalled articles and warns you, still extracting metadata and abstract
@@ -49,6 +49,5 @@ If the article is behind a paywall, `sd2md` will still extract all available met
 ## Planned features
 
 - Local figure/image download
-- MathML to LaTeX equation conversion
 - Batch processing (multiple URLs)
 - Table rendering to GFM Markdown

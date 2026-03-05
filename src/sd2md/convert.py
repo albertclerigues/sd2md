@@ -1,5 +1,7 @@
 import re
 
+from sd2md.mathml import math_node_to_latex
+
 
 def extract_abstract(state: dict) -> str:
     """Extract abstract text from preloaded state."""
@@ -139,9 +141,15 @@ def _convert_inline(node: dict) -> str:
         return ""
 
     if name in ("math", "formula"):
-        alttext = attrs.get("alttext", "")
-        if alttext:
-            return alttext
+        math_node = node
+        if name == "formula":
+            for child in children:
+                if child.get("#name") == "math":
+                    math_node = child
+                    break
+        latex = math_node_to_latex(math_node)
+        if latex:
+            return f"${latex}$"
         return _inline_children(node) if children else text
 
     if name == "label":
@@ -183,15 +191,18 @@ def _convert_display(node: dict, floats: dict) -> str:
     for child in children:
         if child.get("#name") == "formula":
             label = ""
-            alttext = ""
+            math_node = None
             for sub in child.get("$$", []):
                 if sub.get("#name") == "label":
                     label = sub.get("_", "")
                 elif sub.get("#name") == "math":
-                    alttext = sub.get("$", {}).get("alttext", "")
-            if alttext:
-                return f"\n\n{alttext} {label}\n\n"
-            elif label:
+                    math_node = sub
+            if math_node is not None:
+                latex = math_node_to_latex(math_node)
+                if latex:
+                    tag = f" \\tag{{{label}}}" if label else ""
+                    return f"\n\n$${latex}{tag}$$\n\n"
+            if label:
                 return f"\n\n{label}\n\n"
     return ""
 
